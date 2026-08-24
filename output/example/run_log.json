@@ -1,0 +1,187 @@
+{
+ "schema_version": "1.0",
+ "run_id": "20260824T182626_b654fb",
+ "status": "completed",
+ "launched_by": "script",
+ "start_utc": "2026-08-24T10:26:26.785520+00:00",
+ "command": "pipeline/run_all.py",
+ "host": {
+  "hostname": "user-Super-Server",
+  "user": "lin",
+  "platform": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+  "python": "3.12.3",
+  "machine": "x86_64",
+  "git_commit": "ba384df68bb227d2c2e0eb93a0721b9b20b74a20",
+  "git_branch": "main",
+  "git_dirty": true
+ },
+ "pipeline": {
+  "mode": "from-edm",
+  "runs": [
+   12370
+  ],
+  "edm_input": "auto",
+  "remote_edm_dir": "/lustrefs/juno26/users/zhaorz/Calib/ReProd26B/EDM_from_esd/Data",
+  "slice": null,
+  "skip_bkg": false
+ },
+ "stages": [
+  {
+   "stage": "1 edm->npz",
+   "run": 12370,
+   "status": "ok",
+   "elapsed_s": 106.1,
+   "detail": {
+    "edm_dir": "/lustrefs/juno26/users/zhaorz/Calib/ReProd26B/EDM_from_esd/Data"
+   }
+  },
+  {
+   "stage": "2 finalcorrection",
+   "run": 12370,
+   "status": "ok",
+   "elapsed_s": 3.2,
+   "detail": {
+    "phase": 3,
+    "absolute_scale": 0.99743135
+   }
+  },
+  {
+   "stage": "1 edm->npz",
+   "run": 12419,
+   "status": "ok",
+   "elapsed_s": 104.6,
+   "detail": {
+    "edm_dir": "/lustrefs/juno26/users/zhaorz/Calib/ReProd26B/EDM_from_esd/Data"
+   }
+  },
+  {
+   "stage": "2 finalcorrection",
+   "run": 12419,
+   "status": "ok",
+   "elapsed_s": 5.2,
+   "detail": {
+    "phase": 3,
+    "absolute_scale": 0.99743135
+   }
+  },
+  {
+   "stage": "3 selection",
+   "run": 12370,
+   "status": "ok",
+   "elapsed_s": 17.5,
+   "detail": {
+    "cuts_file": "cuts/12370_cuts.json"
+   }
+  },
+  {
+   "stage": "4 physics-qa",
+   "run": 12370,
+   "status": "ok",
+   "elapsed_s": 3.8
+  },
+  {
+   "stage": "publish",
+   "run": "-",
+   "status": "ok",
+   "elapsed_s": 0.0,
+   "detail": {
+    "latest_symlink": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/latest",
+    "target": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626"
+   }
+  }
+ ],
+ "outputs": [
+  {
+   "kind": "npz_raw RUN12370",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/npz_raw/RUN12370.npz",
+   "size_bytes": 83330975,
+   "sha256": "193e9091449e7c45f185f80107cfa4f12683b69bc1f67813750ff3bbd60f0393"
+  },
+  {
+   "kind": "npz_corrected RUN12370",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/npz_corrected/RUN12370.npz",
+   "size_bytes": 83330975,
+   "sha256": "1ac0c20f1ed0a755ca2798c2dfa3f9aa2a9422cd1bc1ca22dd60e5b5427512ed"
+  },
+  {
+   "kind": "npz_raw RUN12419",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/npz_raw/RUN12419.npz",
+   "size_bytes": 154423421,
+   "sha256": "22fcdc9c52e106725f7d262aedfd865be581a90f78478e972ecd1d107e44bccb"
+  },
+  {
+   "kind": "npz_corrected RUN12419",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/npz_corrected/RUN12419.npz",
+   "size_bytes": 154423421,
+   "sha256": "8f5c73a6fbf806f8e1a0f4d0f7b2d4a0fabb42ec7b37c66a410080394a237cb0"
+  },
+  {
+   "kind": "selection Timestamp_wo_Ecut/RUN12370.txt",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/timestamps/Timestamp_wo_Ecut/RUN12370.txt",
+   "size_bytes": 2281218,
+   "sha256": "ac4e729fa6dc5930864f919fd8ce6e119d8c27b145bb85136ec3fbea1bd38ae5"
+  },
+  {
+   "kind": "selection figrues_check/Run12370_EnergySpectrum.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_EnergySpectrum.png",
+   "size_bytes": 88389,
+   "sha256": "53eced9ad6b9ddd7cf6f1c407dd6db01a8dc59c03a8590c56674941ea72a6bea"
+  },
+  {
+   "kind": "selection figrues_check/Run12370_Rho_vs_Z.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_Rho_vs_Z.png",
+   "size_bytes": 75282,
+   "sha256": "b7440505d4f12385ee12f9144fb66bad3ac1ef10e1ccb6dea05830196a78aa97"
+  },
+  {
+   "kind": "selection figrues_check/Run12370_Rho_vs_Z_EFV.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_Rho_vs_Z_EFV.png",
+   "size_bytes": 38895,
+   "sha256": "8263dc0e4e245acf7b22ee53bc90b81c6fe998db67d06a90ec827afbdb7b568c"
+  },
+  {
+   "kind": "selection figrues_check/Run12370_EnergySpectrum_Selection.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_EnergySpectrum_Selection.png",
+   "size_bytes": 30759,
+   "sha256": "10b399b74c19eea526fe3f215398eae3da4529f54d9ee3280d74f55e506bcf8e"
+  },
+  {
+   "kind": "selection Timestamp_Ecut/RUN12370.txt",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/timestamps/Timestamp_Ecut/RUN12370.txt",
+   "size_bytes": 363573,
+   "sha256": "8d0d1e1fef4f4ee98c5c73512e77bac61caa1bc236e25c22e676ee69a933976c"
+  },
+  {
+   "kind": "selection figures_check_important_new/Run12370_2_EnergySpectrum_Fit.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_2_EnergySpectrum_Fit.png",
+   "size_bytes": 247452,
+   "sha256": "c8f4c4ac3ef3bd41d1fa6011ee74367bdf56635fd179b052cdd052000fa2e9d0"
+  },
+  {
+   "kind": "selection figures_check_important_new/Run12370_1_SelectionPlot.png",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/selection/Run12370_1_SelectionPlot.png",
+   "size_bytes": 284648,
+   "sha256": "63425be27de0074395b750b38de60da043f64c61c1c7de137f9476b1e0143a0c"
+  },
+  {
+   "kind": "selection npz/Run12370_SelectionResult.npz",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/results/selection_npz/Run12370_SelectionResult.npz",
+   "size_bytes": 2622422,
+   "sha256": "875b1662638ca16a1e1fc8d5e96741dd96099fb86737da41228e921134d24454"
+  },
+  {
+   "kind": "physics_qa",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/physics_qa/Run12370_physics_qa.png",
+   "size_bytes": 378832,
+   "sha256": "1bda1b4cf9b132012fd8b9c79992f1501bfac8fc546c52a0167f5ff43772e7c5"
+  },
+  {
+   "kind": "physics_qa_json",
+   "path": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/output/20260824_182626/figures/physics_qa/Run12370_physics_qa.json",
+   "size_bytes": 624,
+   "sha256": "4acaffc9328414124078a5429ade0575e0f36f2a0771eb51f07b76b8c866df37"
+  }
+ ],
+ "end_utc": "2026-08-24T10:30:28.064906+00:00",
+ "elapsed_s": 241.28
+}

@@ -1,0 +1,16 @@
+{
+ "mode": "from-edm",
+ "runs": [
+  12370
+ ],
+ "DEFAULT_MODE": "from-edm",
+ "edm_input": "auto",
+ "remote_edm_dir": "/lustrefs/juno26/users/zhaorz/Calib/ReProd26B/EDM_from_esd/Data",
+ "esd_slice": null,
+ "python": "3.12.3",
+ "lib_paths": {
+  "correction_api": "input/correction/correction_api.py",
+  "correction_data_dir": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/input/correction/data",
+  "calib_info": "/datafs/users/lin/workplace/energy_reco/ENL_agent/standalone_esd2npz/calib_run_info/calib_to_analyze.txt"
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "run": 12370,
+ "source": "Ge68",
+ "source_pos_m": [
+  0.0,
+  0.0,
+  0.0
+ ],
+ "bkg_run": "12419",
+ "n_total": 1492630,
+ "n_veto_pass": 1413255,
+ "veto_fraction": 0.05318,
+ "junk_negative_fraction": 0.025668,
+ "living_time_s": 3440.77,
+ "n_efv_selected": 109212,
+ "fitted_peaks": [
+  {
+   "E_MeV": 0.9094,
+   "sigma_MeV": 0.0324,
+   "res_percent": 3.56,
+   "amp": 9975
+  }
+ ],
+ "energy_drift_pct": 2.578,
+ "rate_hz": {
+  "mean": 392.46,
+  "rms": 3.42
+ },
+ "pe_over_e_profile": {
+  "energy_range_MeV": [
+   0.3,
+   2.7
+  ],
+  "ratio_at_1MeV": 2024.0,
+  "max_adjacent_bin_jump_pct": 7.74
+ },
+ "vertex_centroid_dist_mm": 0.3
+}
