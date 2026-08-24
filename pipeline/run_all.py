@@ -14,9 +14,12 @@ ReProd26B EDM chunks on lustrefs and run, per calibration run:
 Optional "full-esd" mode additionally runs Stage 0 (ESD -> EDM, needs the
 external JUNO CVMFS/JUNOSW environment; see config/paths.py).
 
-Every run is fully archived under output/<timestamp>/ with run_log.{md,json},
-config_snapshot.json, console.log, code_snapshot/ (sha256 of the algorithm
-files that define the cuts) and cuts/ (the runtime cut values).
+Every run is fully archived under output/<timestamp>/ with run_log.{md,json}
+(schema 2.0: pipeline_metadata incl. exit_code/errors/packages/pip_freeze/
+config fingerprints, per-run records with run_info + event_statistics +
+input/output fingerprints), config_snapshot.json, console.log,
+code_snapshot/ (sha256 of the algorithm files that define the cuts) and
+cuts/ (the runtime cut values).
 
 Usage:
     python pipeline/run_all.py                      # DEFAULT_RUNS, from-edm
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import csv
 import os
 import re
 import shutil
@@ -45,7 +49,7 @@ sys.path.insert(0, str(_PROJ / "pipeline"))
 os.environ.setdefault("MPLCONFIGDIR", str(_PROJ / "TMP" / "matplotlib"))
 
 import paths  # noqa: E402
-from run_logger import RunLogger  # noqa: E402
+from run_logger import RunLogger, file_info, sha256_file  # noqa: E402
 from cuts_parser import write_cuts_record  # noqa: E402
 
 PY = sys.executable
@@ -71,8 +75,54 @@ def bkg_run_of(run: int):
     return None
 
 
-def run_stage(cmd: list[str], log_path: Path, capture: bool = False):
-    """Run one stage, tee output to its log file; return (rc, output)."""
+def run_info_of(run: int) -> dict:
+    """Run -> {source,date,x_m,y_m,z_m,r_m} from CalibRUN_from_file.csv."""
+    if not os.path.exists(paths.CALIB_POS_FILE):
+        return {}
+    with open(paths.CALIB_POS_FILE) as f:
+        for row in csv.DictReader(f):
+            try:
+                if int(row["RUN"]) == run:
+                    return {
+                        "run": run,
+                        "source": row.get("Source", ""),
+                        "date": row.get("Date", ""),
+                        "x_m": float(row.get("X[m]", "nan")),
+                        "y_m": float(row.get("Y[m]", "nan")),
+                        "z_m": float(row.get("Z[m]", "nan")),
+                        "r_m": float(row.get("R[m]", "nan")),
+                    }
+            except (KeyError, ValueError):
+                continue
+    return {}
+
+
+def event_statistics_of(npz_path: Path) -> dict:
+    """Event statistics + 200-bin pre-selection spectrum (mirrors fitter)."""
+    import numpy as np
+    try:
+        with np.load(npz_path, allow_pickle=True) as d:
+            e = d["omilrec_energy"].astype(np.float64)
+    except Exception as ex:
+        return {"error": str(ex)}
+    finite = np.isfinite(e)
+    counts, edges = np.histogram(e[finite], bins=200, range=(0.0, 3.0))
+    return {
+        "total_events": int(e.size),
+        "finite_events": int(finite.sum()),
+        "energy_min": float(e[finite].min()) if finite.any() else None,
+        "energy_max": float(e[finite].max()) if finite.any() else None,
+        "energy_mean": float(e[finite].mean()) if finite.any() else None,
+        "energy_median": float(np.median(e[finite])) if finite.any() else None,
+        "pre_selection_spectrum": {
+            "bin_edges_full": [float(x) for x in edges],
+            "counts": [int(x) for x in counts],
+        },
+    }
+
+
+def run_stage(cmd: list[str], log_path: Path):
+    """Run one stage, tee output to its log file; return (rc, output, seconds)."""
     print(f"$ {' '.join(str(c) for c in cmd)}", flush=True)
     t0 = time.time()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,6 +187,7 @@ def main() -> int:
     print(f"[Info] Output directory: {out}")
     print(f"[Info] Mode: {mode}   runs: {runs}")
 
+    failed = False
     with RunLogger(output_dir=out, project_root=_PROJ,
                    launched_by=args.launched_by) as logger:
         tee_out = logger.ConsoleTee(sys.stdout, logger)
@@ -146,21 +197,22 @@ def main() -> int:
                 remote_edm_dir=str(paths.REMOTE_EDM_DIR),
                 slice=args.slice, skip_bkg=args.skip_bkg)
             logger.snapshot_code()
-            logger.snapshot_config({
-                "mode": mode, "runs": runs,
-                "DEFAULT_MODE": paths.DEFAULT_MODE,
-                "edm_input": args.edm_input or "auto",
-                "remote_edm_dir": str(paths.REMOTE_EDM_DIR),
-                "esd_slice": args.slice,
-                "python": sys.version.split()[0],
-                "lib_paths": {
-                    "correction_api": "input/correction/correction_api.py",
-                    "correction_data_dir": str(paths.CORRECTION_DATA_DIR),
-                    "calib_info": str(paths.CALIB_INFO_FILE)},
-            })
+            logger.snapshot_config()
 
-            failed = False
             for run in runs:
+                rec = {"run": run, "stages": [], "outputs": [], "status": "ok"}
+                ri = run_info_of(run)
+                rec["source"] = ri.get("source")
+                rec["run_info"] = ri
+
+                def stage(status, name, dt, detail=None, run_id=None):
+                    rec["stages"].append({
+                        "stage": name,
+                        "run": run_id if run_id is not None else run,
+                        "status": status,
+                        "elapsed_s": dt, "detail": detail or {},
+                    })
+
                 # ---------------- Stage 0 (optional) ----------------
                 if mode == "full-esd":
                     esd_list = _PROJ / f"esd_list_{run}.txt"
@@ -168,9 +220,7 @@ def main() -> int:
                         rc, o, dt = run_stage(
                             [PY, _PROJ / "src/list_esd.py", run,
                              "--out", esd_list], logs / f"stage0a_{run}.log")
-                        logger.add_stage(stage="0a esd-list", run=run,
-                                         status="ok" if rc == 0 else "failed",
-                                         elapsed_s=dt)
+                        stage("ok" if rc == 0 else "failed", "0a esd-list", dt)
                         if rc:
                             failed = True
                             break
@@ -179,9 +229,7 @@ def main() -> int:
                     if args.slice:
                         cmd += ["--start", 0, "--end", args.slice - 1]
                     rc, o, dt = run_stage(cmd, logs / f"stage0b_{run}.log")
-                    logger.add_stage(stage="0b esd->edm", run=run,
-                                     status="ok" if rc == 0 else "failed",
-                                     elapsed_s=dt)
+                    stage("ok" if rc == 0 else "failed", "0b esd->edm", dt)
                     if rc:
                         failed = True
                         break
@@ -202,9 +250,9 @@ def main() -> int:
                                             paths.EDM_DIR)
                     if not edm_dir:
                         print(f"[Error] no EDM data for RUN {r}")
-                        logger.add_stage(stage="1 edm->npz", run=r,
-                                         status="failed",
-                                         detail="no EDM input")
+                        stage("failed", "1 edm->npz", 0,
+                              {"detail": "no EDM input"}, run_id=r)
+                        logger.add_error("stage1", f"RUN{r}: no EDM input")
                         failed = True
                         break
                     rc, o, dt = run_stage(
@@ -212,17 +260,26 @@ def main() -> int:
                          "--run", r, "--input-dir", edm_dir,
                          "--out-dir", res_npz_raw],
                         logs / f"stage1_{r}.log")
-                    logger.add_stage(stage="1 edm->npz", run=r,
-                                     status="ok" if rc == 0 else "failed",
-                                     elapsed_s=dt, detail={"edm_dir": edm_dir})
+                    n_chunks = 0
+                    if os.path.isdir(edm_dir):
+                        n_chunks = len(list(Path(edm_dir).glob(f"run_{r}_*.root")))
+                    stage("ok" if rc == 0 else "failed", "1 edm->npz", dt,
+                          {"edm_dir": edm_dir, "n_chunks": n_chunks},
+                          run_id=r)
                     if rc:
                         failed = True
                         break
+                    raw_npz = res_npz_raw / f"RUN{r}.npz"
+                    cur_events = event_statistics_of(raw_npz)
+                    cur_input = {
+                        "edm_dir": edm_dir,
+                        "n_chunks": n_chunks,
+                        "raw_npz": file_info(raw_npz),
+                    }
 
                     rc, o, dt = run_stage(
                         [PY, _PROJ / "src/apply_final_correction.py", r,
-                         "--input", res_npz_raw / f"RUN{r}.npz",
-                         "--out-dir", res_npz_corr],
+                         "--input", raw_npz, "--out-dir", res_npz_corr],
                         logs / f"stage2_{r}.log")
                     detail = {}
                     m = re.search(r"phase=(\d+)", o)
@@ -231,17 +288,39 @@ def main() -> int:
                     m = re.search(r"absolute_scale=([\d.]+)", o)
                     if m:
                         detail["absolute_scale"] = float(m.group(1))
-                    logger.add_stage(stage="2 finalcorrection", run=r,
-                                     status="ok" if rc == 0 else "failed",
-                                     elapsed_s=dt, detail=detail)
+                    stage("ok" if rc == 0 else "failed", "2 finalcorrection", dt,
+                          detail, run_id=r)
                     if rc:
                         failed = True
                         break
-                    logger.add_output(res_npz_raw / f"RUN{r}.npz",
-                                      f"npz_raw RUN{r}")
-                    logger.add_output(res_npz_corr / f"RUN{r}.npz",
-                                      f"npz_corrected RUN{r}")
+                    corr_npz = res_npz_corr / f"RUN{r}.npz"
+                    out_fp = [
+                        {"path": str(raw_npz), "kind": "npz_raw",
+                         **file_info(raw_npz)},
+                        {"path": str(corr_npz), "kind": "npz_corrected",
+                         **file_info(corr_npz)},
+                    ]
+                    if r == run:
+                        rec["event_statistics"] = cur_events
+                        rec["input"] = cur_input
+                        rec["outputs"] += out_fp
+                    else:
+                        # background run: independent record (no selection)
+                        bkg_rec = {
+                            "run": r, "source": f"bkg-of-{run}",
+                            "status": "ok",
+                            "run_info": run_info_of(r),
+                            "input": cur_input,
+                            "event_statistics": cur_events,
+                            "stages": [s for s in rec["stages"]
+                                       if s["run"] == r],
+                            "outputs": out_fp,
+                        }
+                        logger.add_run(**bkg_rec)
+                        rec["stages"] = [s for s in rec["stages"]
+                                         if s["run"] != r]
                 if failed:
+                    logger.add_run(**{**rec, "status": "failed"})
                     break
 
                 # ---------------- Stage 3: selection (cuts) ----------------
@@ -253,13 +332,13 @@ def main() -> int:
                      "--out-dir", sel_work],
                     logs / f"stage3_{run}.log")
                 cuts = write_cuts_record(out, run, o) if rc == 0 else {}
-                logger.add_stage(stage="3 selection", run=run,
-                                 status="ok" if rc == 0 else "failed",
-                                 elapsed_s=dt,
-                                 detail={"cuts_file": f"cuts/{run}_cuts.json"})
+                stage("ok" if rc == 0 else "failed", "3 selection", dt,
+                      {"cuts_file": f"cuts/{run}_cuts.json"})
                 if rc:
                     failed = True
+                    logger.add_run(**{**rec, "status": "failed"})
                     break
+                rec["cuts_ref"] = f"cuts/{run}_cuts.json"
 
                 # harvest deliverables out of the selection work dir
                 for src in sel_work.rglob("*"):
@@ -276,7 +355,9 @@ def main() -> int:
                         continue
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dst)
-                    logger.add_output(dst, f"selection {rel}")
+                    rec["outputs"].append(
+                        {"path": str(dst), "kind": f"selection {rel}",
+                         **file_info(dst)})
                 shutil.rmtree(sel_work, ignore_errors=True)
                 while work.exists() and not any(work.iterdir()):
                     work.rmdir()
@@ -290,22 +371,18 @@ def main() -> int:
                          "--selection-npz", sel_npz,
                          "--out-dir", fig_qa],
                         logs / f"stage4_qa_{run}.log")
-                    logger.add_stage(stage="4 physics-qa", run=run,
-                                     status="ok" if rc == 0 else "failed",
-                                     elapsed_s=dt)
-                    qa_png = fig_qa / f"Run{run}_physics_qa.png"
-                    if qa_png.exists():
-                        logger.add_output(qa_png, "physics_qa")
-                    qa_js = fig_qa / f"Run{run}_physics_qa.json"
-                    if qa_js.exists():
-                        logger.add_output(qa_js, "physics_qa_json")
+                    stage("ok" if rc == 0 else "failed", "4 physics-qa", dt)
+                    for suffix, kind in (("png", "physics_qa"),
+                                         ("json", "physics_qa_json")):
+                        qa_f = fig_qa / f"Run{run}_physics_qa.{suffix}"
+                        if qa_f.exists():
+                            rec["outputs"].append(
+                                {"path": str(qa_f), "kind": kind,
+                                 **file_info(qa_f)})
 
-            logger.data["status"] = "failed" if failed else "completed"
+                logger.add_run(**rec)
 
             # ---- publish this run as "latest" (atomic symlink swap) ----
-            # Only on full success, so downstream consumers (standalone_fitter
-            # DATA_INPUT_PATH = .../output/latest/results/selection_npz) never
-            # see a partially produced dataset.
             if not failed:
                 latest_link = paths.OUTPUT_DIR / "latest"
                 tmp_link = paths.OUTPUT_DIR / ".latest.tmp"
@@ -313,11 +390,9 @@ def main() -> int:
                     tmp_link.unlink()
                 tmp_link.symlink_to(out, target_is_directory=True)
                 os.replace(tmp_link, latest_link)
-                logger.add_stage(stage="publish", run="-",
-                                 status="ok", elapsed_s=0.0,
-                                 detail={"latest_symlink": str(latest_link),
-                                         "target": str(out)})
-            logger.dump()
+                logger.set_pipeline_info(latest_symlink=str(latest_link),
+                                         latest_target=str(out))
+            logger.set_exit_code(1 if failed else 0)
 
     print()
     print("[Info] Pipeline", "FAILED" if failed else "complete.")

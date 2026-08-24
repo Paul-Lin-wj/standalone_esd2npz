@@ -1,13 +1,22 @@
 """
 run_logger.py — audit-grade run logging for the standalone_esd2npz pipeline.
 
-Mirrors the standalone_fitter logging discipline:
-  - per-run timestamped output directory
-  - run_log.md / run_log.json with status, timing, host, code fingerprints
-  - config_snapshot.json capturing every tunable used by the run
-  - full console.log tee
-  - code_snapshot/ + sha256 of every algorithm file that produced the data
-    (the authoritative record of the cut/selection logic)
+Schema 2.0, aligned with the standalone_fitter logging discipline:
+
+  pipeline_metadata: launched_by, command[], exit_code, start/end (UTC+local),
+    system (hostname/user/platform/python_version/python_executable), git
+    (commit/branch/has_uncommitted_changes), packages (core versions),
+    pip_freeze, config_files + config_snapshot (path+sha256+size of every
+    tunable file), errors[]
+  runs[]: per-run records — run_info (date/position from CalibRUN.csv),
+    input fingerprints (EDM dir, chunk count), event_statistics (counts,
+    energy range/mean/median, 200-bin pre-selection spectrum), stage detail
+    with per-stage status/elapsed, cut references, output fingerprints
+  code_snapshot/ + sha256 of every algorithm file (the authoritative record
+    of the cut/selection logic)
+
+On unhandled exceptions a traceback.log is written and status=failed; failed
+runs still dump the log (partial stage records preserved).
 """
 
 from __future__ import annotations
@@ -20,10 +29,11 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 # Algorithm files whose exact content defines the processing (and the cuts).
 # Anything listed here is copied verbatim into code_snapshot/ at run start.
@@ -40,6 +50,15 @@ CODE_FILES = [
     "pipeline/cuts_parser.py",
 ]
 
+# Config/tunable files fingerprinted (path+sha256+size) in config_snapshot.
+CONFIG_FILES = [
+    "config/paths.py",
+    "requirements.txt",
+    "calib_run_info/calib_to_analyze.txt",
+    "calib_run_info/CalibRUN_from_file.csv",
+    "input/correction/correction_api.py",
+]
+
 
 def sha256_file(path) -> str:
     try:
@@ -52,6 +71,45 @@ def sha256_file(path) -> str:
         return "unavailable"
 
 
+def file_info(path) -> dict:
+    p = Path(path)
+    return {
+        "path": str(p.resolve()),
+        "exists": p.exists(),
+        "size_bytes": p.stat().st_size if p.exists() else None,
+        "sha256": sha256_file(path) if p.exists() else None,
+    }
+
+
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _now_local() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _core_packages():
+    pkgs = {}
+    for name in ("numpy", "pandas", "scipy", "matplotlib", "uproot"):
+        try:
+            mod = __import__(name)
+            pkgs[name] = getattr(mod, "__version__", "unknown")
+        except Exception:
+            pkgs[name] = "not-installed"
+    return pkgs
+
+
+def _pip_freeze():
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "freeze", "--all"],
+            capture_output=True, text=True, timeout=60)
+        return sorted(l for l in r.stdout.splitlines() if l.strip())
+    except Exception:
+        return []
+
+
 def _git_info(root: Path) -> dict:
     def _git(*args):
         try:
@@ -62,9 +120,10 @@ def _git_info(root: Path) -> dict:
             return ""
     commit = _git("rev-parse", "HEAD")
     return {
-        "git_commit": commit or "not-a-repo",
-        "git_branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
-        "git_dirty": bool(_git("status", "--porcelain")) if commit else None,
+        "commit": commit or "not-a-repo",
+        "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+        "has_uncommitted_changes": bool(_git("status", "--porcelain"))
+        if commit else None,
     }
 
 
@@ -76,24 +135,38 @@ class RunLogger:
         self.output_dir = Path(output_dir)
         self.project_root = Path(project_root)
         self.launched_by = launched_by
+        self._exit_code: int | None = None
         self.data = {
             "schema_version": SCHEMA_VERSION,
             "run_id": datetime.now().strftime("%Y%m%dT%H%M%S")
                       + "_" + os.urandom(3).hex(),
             "status": "running",
             "launched_by": launched_by,
-            "start_utc": datetime.now(timezone.utc).isoformat(),
-            "command": " ".join(sys.argv),
-            "host": {
-                "hostname": socket.gethostname(),
-                "user": os.environ.get("USER", ""),
-                "platform": platform.platform(),
-                "python": sys.version.split()[0],
-                "machine": platform.machine(),
+            "command": [os.path.basename(sys.argv[0]), *sys.argv[1:]],
+            "exit_code": None,
+            "pipeline_metadata": {
+                "timestamp_start_utc": _now_utc(),
+                "timestamp_start_local": _now_local(),
+                "system": {
+                    "hostname": socket.gethostname(),
+                    "user": os.environ.get("USER", ""),
+                    "platform": platform.platform(),
+                    "python_version": sys.version.split()[0],
+                    "python_executable": sys.executable,
+                    "timestamp_utc": _now_utc(),
+                },
+                "git": _git_info(project_root),
+                "packages": _core_packages(),
+                "pip_freeze": _pip_freeze(),
+                "config_files": {},   # name -> absolute path
+                "config_snapshot": {},  # name -> {path, sha256, size_bytes}
+                "timestamp_end_utc": None,
+                "timestamp_end_local": None,
+                "elapsed_s": None,
             },
-            "pipeline": {},      # mode / runs / dirs (filled by run_all)
-            "stages": [],        # per-stage records incl. cuts
-            "outputs": [],       # deliverable files
+            "errors": [],
+            "runs": [],       # per-run records (see add_run)
+            "outputs": [],    # global deliverable list (also per-run)
         }
         self._t0 = time.time()
         self._fh = None
@@ -119,11 +192,31 @@ class RunLogger:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.data["end_utc"] = datetime.now(timezone.utc).isoformat()
-        self.data["elapsed_s"] = round(time.time() - self._t0, 2)
-        self.data["status"] = "failed" if exc_type else (
-            self.data.get("status", "completed"))
-        self.data["host"] = {**self.data["host"], **_git_info(self.project_root)}
+        md = self.data["pipeline_metadata"]
+        md["timestamp_end_utc"] = _now_utc()
+        md["timestamp_end_local"] = _now_local()
+        md["elapsed_s"] = round(time.time() - self._t0, 2)
+        if exc_type is not None:
+            # unhandled exception: write traceback.log, mark failed
+            with open(self.output_dir / "traceback.log", "w") as f:
+                traceback.print_exception(exc_type, exc, tb, file=f)
+            self.data["exit_code"] = self._exit_code if self._exit_code is not None else 1
+            self.data["status"] = "failed"
+            self.add_error("unhandled-exception", f"{exc_type.__name__}: {exc}")
+        elif self._exit_code is not None:
+            self.data["exit_code"] = self._exit_code
+            self.data["status"] = "failed" if self._exit_code != 0 else "completed"
+        else:
+            self.data["exit_code"] = 0
+            self.data["status"] = "completed"
+        self.data["summary"] = {
+            "n_runs": len(self.data["runs"]),
+            "n_ok": sum(1 for r in self.data["runs"] if r.get("status") == "ok"),
+            "n_failed": sum(1 for r in self.data["runs"] if r.get("status") != "ok"),
+            "n_outputs": sum(len(r.get("outputs", []))
+                            for r in self.data["runs"]),
+            "n_errors": len(self.data["errors"]),
+        }
         self.dump()
         if self._fh:
             self._fh.close()
@@ -131,10 +224,38 @@ class RunLogger:
 
     # ---------------- records ----------------
     def set_pipeline_info(self, **kw):
-        self.data["pipeline"].update(kw)
+        """Free-form pipeline-level info (mode, runs, dirs, ...)."""
+        self.data.setdefault("pipeline", {}).update(kw)
+        self.dump()
 
-    def add_stage(self, **kw):
-        self.data["stages"].append(kw)
+    def set_exit_code(self, code: int):
+        self._exit_code = int(code)
+
+    def add_error(self, source: str, message: str):
+        self.data["errors"].append({
+            "timestamp_utc": _now_utc(),
+            "source": source,
+            "message": str(message),
+        })
+
+    def add_run(self, *, run: int, status: str, source: str | None = None,
+                run_info: dict | None = None, input: dict | None = None,
+                event_statistics: dict | None = None,
+                stages: list | None = None,
+                cuts_ref: str | None = None,
+                outputs: list | None = None) -> None:
+        """Append one per-run audit record (mirrors fitter's sources[])."""
+        self.data["runs"].append({
+            "run": int(run),
+            "source": source,
+            "status": status,
+            "run_info": run_info or {},
+            "input": input or {},
+            "event_statistics": event_statistics or {},
+            "stages": stages or [],
+            "cuts_ref": cuts_ref,
+            "outputs": outputs or [],
+        })
         self.dump()
 
     def add_output(self, path, kind):
@@ -169,37 +290,87 @@ class RunLogger:
             json.dump(hashes, f, indent=1)
         return hashes
 
-    def snapshot_config(self, config: dict):
+    def snapshot_config(self):
+        """Fingerprint every tunable/config file (mirrors fitter config_snapshot)
+        and write the standalone config_snapshot.json next to the run log."""
+        md = self.data["pipeline_metadata"]
+        for name in CONFIG_FILES:
+            path = self.project_root / name
+            md["config_files"][name] = str(path.resolve())
+            md["config_snapshot"][name] = file_info(path)
         with open(self.output_dir / "config_snapshot.json", "w") as f:
-            json.dump(config, f, indent=1, ensure_ascii=False)
+            json.dump(md["config_snapshot"], f, indent=1, ensure_ascii=False)
 
     # ---------------- markdown ----------------
     def _markdown(self) -> str:
         d = self.data
+        md = d["pipeline_metadata"]
         L = [f"# Run Log — standalone_esd2npz (schema {SCHEMA_VERSION})", "",
              f"**Run ID**: `{d['run_id']}`  |  **Status**: `{d['status']}`  |  "
-             f"**Elapsed**: {d.get('elapsed_s','?')} s", "",
-             f"**Command**: `{d['command']}`", "",
-             "## Pipeline", ""]
-        for k, v in d["pipeline"].items():
+             f"**Elapsed**: {md.get('elapsed_s', '?')} s", "",
+             f"**Command**: `{' '.join(d['command'])}`", "",
+             f"**Exit code**: `{d['exit_code']}`", "",
+             "## System Information", "",
+             "| Field | Value |", "|---|---|"]
+        for k, v in md["system"].items():
+            L.append(f"| {k} | `{v}` |")
+        L += ["", "## Code Version", "",
+              "| Field | Value |", "|---|---|"]
+        for k, v in md["git"].items():
+            L.append(f"| Git {k} | `{v}` |")
+        if md["git"].get("has_uncommitted_changes"):
+            L += ["", "> Warning: Working tree has uncommitted changes."]
+        L += ["", "## Package Versions", ""]
+        for k, v in md["packages"].items():
             L.append(f"- **{k}**: `{v}`")
-        L += ["", "## Host", ""]
-        for k, v in d["host"].items():
-            if v is not None:
-                L.append(f"- {k}: `{v}`")
-        L += ["", "## Stages", "",
-              "| stage | run | status | seconds | detail |",
-              "|---|---|---|---|---|"]
-        for s in d["stages"]:
-            det = s.get("detail", "")
-            if isinstance(det, dict):
-                det = "; ".join(f"{k}={v}" for k, v in det.items())
-            L.append(f"| {s.get('stage','')} | {s.get('run','')} | "
-                     f"{s.get('status','')} | {s.get('elapsed_s','')} | {det} |")
-        L += ["", "## Outputs", "",
-              "| kind | path | size |", "|---|---|---|"]
-        for o in d["outputs"]:
-            L.append(f"| {o['kind']} | `{o['path']}` | {o['size_bytes']} |")
+        L += ["", "## Configuration Files", "",
+              "| Config | Path | SHA-256 |", "|---|---|---|"]
+        for name, info in md["config_snapshot"].items():
+            sh = (info.get("sha256") or "n/a")[:16] + "..."
+            L.append(f"| {name} | `{info['path']}` | `{sh}` |")
+        if d["errors"]:
+            L += ["", "## Errors", ""]
+            for e in d["errors"]:
+                L.append(f"- `{e['timestamp_utc']}` [{e['source']}] {e['message']}")
+        L += ["", "## Pipeline", ""]
+        for k, v in d.get("pipeline", {}).items():
+            L.append(f"- **{k}**: `{v}`")
+        L += ["", "## Per-Run Records", ""]
+        for r in d["runs"]:
+            st = "OK" if r.get("status") == "ok" else r.get("status", "?")
+            L.append(f"\n### [{st}] {'RUN' + str(r['run'])}"
+                     f"{' — ' + r['source'] if r.get('source') else ''}\n")
+            L += ["| Field | Value |", "|---|---|"]
+            L.append(f"| Status | {r.get('status')} |")
+            ri = r.get("run_info") or {}
+            for k, v in ri.items():
+                L.append(f"| {k} | `{v}` |")
+            inp = r.get("input") or {}
+            if inp:
+                L.append(f"| EDM dir | `{inp.get('edm_dir')}` |")
+                L.append(f"| EDM chunks | `{inp.get('n_chunks')}` |")
+            es = r.get("event_statistics") or {}
+            if es:
+                L.append(f"| Events (total / finite) | "
+                         f"`{es.get('total_events')} / {es.get('finite_events')}` |")
+                L.append(f"| Energy min/max | "
+                         f"`{es.get('energy_min')} / {es.get('energy_max')} MeV` |")
+                L.append(f"| Energy mean/median | "
+                         f"`{es.get('energy_mean')} / {es.get('energy_median')} MeV` |")
+            if r.get("cuts_ref"):
+                L.append(f"| Cuts | `{r['cuts_ref']}` |")
+            L += ["", "| stage | status | seconds | detail |", "|---|---|---|---|"]
+            for s in r.get("stages", []):
+                det = s.get("detail", "")
+                if isinstance(det, dict):
+                    det = "; ".join(f"{k}={v}" for k, v in det.items())
+                L.append(f"| {s.get('stage','')} | {s.get('status','')} | "
+                         f"{s.get('elapsed_s','')} | {det} |")
+            if r.get("outputs"):
+                L += ["", "| output | kind | sha256 |", "|---|---|---|"]
+                for o in r["outputs"]:
+                    sh = (o.get("sha256") or "n/a")[:16]
+                    L.append(f"| `{o['path']}` | {o['kind']} | `{sh}...` |")
         L += ["", f"See `code_snapshot/sha256.json` for the exact algorithm "
                   f"versions (cut logic) used by this run, and `cuts/` for the "
                   f"run-specific selection conditions."]

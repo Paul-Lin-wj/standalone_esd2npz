@@ -68,15 +68,41 @@ algorithm for that run.
    timestamp files are written with (`Timestamp_Ecut`) and without
    (`Timestamp_wo_Ecut`) this energy cut
 
-## Run Log (audit-grade, mirrors standalone_fitter)
+## Run Log (audit-grade, mirrors standalone_fitter, schema 2.0)
 
-`output/<ts>/run_log.{md,json}`:
+`output/<ts>/run_log.{md,json}` 与 `config_snapshot.json` 提供与 fitter 对齐的审计链：
 
-- mode, runs, EDM source dir, per-stage status/elapsed
-- every deliverable file with size + sha256
-- host / python / git commit
-- `config_snapshot.json`: every tunable in effect
-- `console.log` + `logs/stage*.log`: complete stage output
+**pipeline_metadata（run_log.json 顶层）**：
+
+| 类别 | 字段 |
+|---|---|
+| 启动 | `launched_by`、`command[]`、`exit_code`、`run_id` |
+| 时间 | `timestamp_start/end_utc` + `timestamp_start/end_local`（双格式） |
+| 系统 | hostname、user、platform、python_version、**python_executable** |
+| 代码版本 | `git`：commit、branch、has_uncommitted_changes |
+| 依赖 | `packages`（numpy/pandas/scipy/matplotlib/uproot 版本）+ **`pip_freeze`（完整清单）** |
+| 配置指纹 | `config_files` + `config_snapshot`：paths.py / requirements.txt / calib 两表 / correction_api.py 的 **路径+SHA-256+大小** |
+| 错误 | `errors[]`：结构化（时间戳/来源/消息） |
+| 流水线 | mode、runs、EDM 目录、slice、latest 发布链接 |
+
+**runs[]（每个 run（含本底 run）一条，镜像 fitter 的 sources[]）**：
+
+| 字段 | 内容 |
+|---|---|
+| `run_info` | 日期、源、位置 X/Y/Z、R（来自 CalibRUN_from_file.csv） |
+| `input` | EDM 目录、分块数、raw npz 的**路径+大小+SHA-256** |
+| `event_statistics` | 总事件/有限值事件数、能量 min/max/mean/median、**200-bin 预选择谱直方图**（可重建输入分布） |
+| `stages` | 每阶段状态/耗时/细节（含 phase、absolute_scale、n_chunks） |
+| `cuts_ref` | 指向 `cuts/{RUN}_cuts.json` |
+| `outputs` | 每个产出文件的**路径+大小+SHA-256**（npz/时间戳/图/QA） |
+
+- `config_snapshot.json`：上述配置文件的完整指纹（路径+SHA-256+大小）
+- `code_snapshot/` + `sha256.json`：算法文件逐字快照（cut 逻辑的权威记录）
+- `console.log` + `logs/stage*.log`：完整阶段输出
+- `traceback.log`：未处理异常时自动生成，status=failed
+- 失败运行仍完整落盘：已完成的 run 记录保留，`errors[]` 记录失败 stage
+
+**第三方复核路径**：取 `run_log.json` → 按 git commit 检出代码 → 按 config_snapshot 校验配置 → 按 SHA-256 校验输入 npz/输出文件 → 复核事件统计与 cuts 值 → 对照 `logs/stage*.log` 过程。
 
 ## Reading Cuts Back Later
 

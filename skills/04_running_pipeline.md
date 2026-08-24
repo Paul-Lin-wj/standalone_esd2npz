@@ -69,7 +69,9 @@ disable.
 
 ## After the Run
 
-- Check `run_log.md` first: stage table, status, elapsed, output list.
+- Check `run_log.md` first: system/git/package versions, config fingerprints,
+  per-run records (run_info, event statistics, input/output SHA-256, stage
+  status/elapsed), errors[] and exit code.
 - Check `cuts/summary.md` for the selection conditions of every run (skill 07).
 - Open `figures/physics_qa/Run{R}_physics_qa.png` for the physics check (skill 08).
 - Hand-off to the fitter: `output/latest` is atomically repointed to this
