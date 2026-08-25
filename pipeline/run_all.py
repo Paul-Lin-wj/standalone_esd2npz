@@ -165,6 +165,9 @@ def main() -> int:
                     help="do not auto-process the background run")
     ap.add_argument("--skip-qa", action="store_true",
                     help="skip the physics QA figure stage")
+    ap.add_argument("--out-dir", default=None,
+                    help="output root (default: output/<timestamp>); when given, "
+                         "writes directly into this directory (no nested timestamp)")
     ap.add_argument("--launched-by", default="script", choices=["script", "agent"])
     args = ap.parse_args()
 
@@ -172,7 +175,7 @@ def main() -> int:
     mode = "full-esd" if args.full_esd else paths.DEFAULT_MODE
 
     ts = time.strftime("%Y%m%d_%H%M%S")
-    out = paths.OUTPUT_DIR / ts
+    out = Path(args.out_dir) if args.out_dir else paths.OUTPUT_DIR / ts
     res_npz_raw = out / "results" / "npz_raw"
     res_npz_corr = out / "results" / "npz_corrected"
     res_sel_npz = out / paths.SELECTION_NPZ_SUBDIR
@@ -429,7 +432,7 @@ def main() -> int:
                     audit_failed = True
 
             # ---- publish latest only when everything is complete ----
-            if not failed and audit_ok:
+            if not failed and audit_ok and not args.out_dir:
                 latest_link = paths.OUTPUT_DIR / "latest"
                 tmp_link = paths.OUTPUT_DIR / ".latest.tmp"
                 if tmp_link.is_symlink() or tmp_link.exists():
@@ -449,7 +452,7 @@ def main() -> int:
     print()
     print("[Info] Pipeline", "FAILED" if failed else "complete.")
     print(f"[Info] Output directory: {out}")
-    if not failed and audit_ok:
+    if not failed and audit_ok and not args.out_dir:
         print(f"[Info] Published as: {paths.OUTPUT_DIR / 'latest'}")
     print(f"[Info] Selection NPZ (fitter input): {res_sel_npz}")
     print(f"[Info] Cut conditions: {out / 'cuts'}")

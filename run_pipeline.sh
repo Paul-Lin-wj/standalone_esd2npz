@@ -28,8 +28,15 @@ PY="${VENV_DIR}/bin/python"
 # Split positional args (run numbers) from flags; flags go to run_all.py
 RUN_ARGS=()
 PASS_ARGS=()
-for a in "$@"; do
-    if [[ "$a" =~ ^-- ]]; then PASS_ARGS+=("$a"); else RUN_ARGS+=("$a"); fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --out-dir|--edm-input)
+            PASS_ARGS+=("$1" "$2"); shift 2 ;;
+        --*)
+            PASS_ARGS+=("$1"); shift ;;
+        *)
+            RUN_ARGS+=("$1"); shift ;;
+    esac
 done
 if [ ${#RUN_ARGS[@]} -gt 0 ]; then
     PASS_ARGS=("${PASS_ARGS[@]}" --runs "${RUN_ARGS[@]}")
